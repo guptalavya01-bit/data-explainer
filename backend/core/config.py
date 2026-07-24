@@ -16,14 +16,18 @@ class Settings(BaseSettings):
     # ── Local / Self-Hosted LLM (Ollama, vLLM, LM Studio) ────
     # No API key required for local Ollama or private vLLM on AWS EC2
     local_llm_base_url: str = "http://localhost:11434/v1"
-    local_llm_model: str = "llama3.1"
+    local_llm_model: str = "qwen2.5:0.5b"
+
 
     # ── AWS Bedrock (Uses AWS IAM Roles — No third-party API key) ──
     aws_region: str = "us-east-1"
     aws_bedrock_model_id: str = "meta.llama3-8b-instruct-v1:0"
 
-    # ── Anthropic (Optional) ─────────────────────────────────
+    # ── Anthropic & Cloud API Keys (Optional for Cloud Deployments) ──
     anthropic_api_key: str = ""
+    gemini_api_key: str = ""
+    openai_api_key: str = ""
+
 
     # ── IBM Cloud Object Storage (optional) ──────────────────
     cos_endpoint: str = ""

@@ -2,9 +2,11 @@
 Multi-provider LLM streaming client.
 
 Supports:
-1. Local LLM / Ollama / vLLM (OpenAI-compatible protocol, NO API key needed)
-2. AWS Bedrock (Serverless Llama 3 via AWS IAM credentials)
-3. Anthropic Claude (via ANTHROPIC_API_KEY)
+1. Google Gemini API (via GEMINI_API_KEY - Free Tier available)
+2. Anthropic Claude (via ANTHROPIC_API_KEY)
+3. OpenAI (via OPENAI_API_KEY)
+4. Local LLM / Ollama / vLLM (NO API key needed for local execution)
+5. AWS Bedrock (Serverless Llama 3 via AWS IAM credentials)
 """
 
 from __future__ import annotations
@@ -16,7 +18,7 @@ from core.config import settings
 
 
 class LLMService:
-    """Wraps local LLMs (Ollama/vLLM), AWS Bedrock, and Anthropic for streaming data analysis."""
+    """Wraps Gemini, Anthropic, OpenAI, Local LLMs (Ollama/vLLM), and AWS Bedrock."""
 
     SYSTEM_EXPLAIN = (
         "You are an expert data analyst. Analyze the provided dataset profile "
@@ -40,26 +42,51 @@ class LLMService:
     )
 
     def __init__(self) -> None:
-        self.provider = settings.llm_provider.lower()
+        # Determine provider based on available API keys or explicit LLM_PROVIDER setting
+        if settings.gemini_api_key:
+            self.provider = "gemini"
+        elif settings.anthropic_api_key:
+            self.provider = "anthropic"
+        elif settings.openai_api_key:
+            self.provider = "openai"
+        else:
+            self.provider = settings.llm_provider.lower()
 
-        # Initialize clients lazily based on configured provider
+        # Initialize clients
         self.openai_client = None
         self.anthropic_client = None
         self.bedrock_client = None
 
-        if self.provider in ("ollama", "local", "openai"):
+        if self.provider == "gemini":
             import openai
-            # For Ollama / Local LLM, no real API key is needed. Dummy string "ollama" satisfies SDK.
+            self.openai_client = openai.AsyncOpenAI(
+                base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+                api_key=settings.gemini_api_key,
+            )
+            self.model_name = "gemini-1.5-flash"
+
+        elif self.provider == "openai":
+            import openai
+            self.openai_client = openai.AsyncOpenAI(
+                api_key=settings.openai_api_key,
+            )
+            self.model_name = "gpt-4o-mini"
+
+        elif self.provider in ("ollama", "local"):
+            import openai
             self.openai_client = openai.AsyncOpenAI(
                 base_url=settings.local_llm_base_url,
-                api_key="ollama"
+                api_key="ollama",
             )
+            self.model_name = settings.local_llm_model
+
         elif self.provider == "anthropic":
             if settings.anthropic_api_key:
                 import anthropic
                 self.anthropic_client = anthropic.AsyncAnthropic(
                     api_key=settings.anthropic_api_key
                 )
+
         elif self.provider == "bedrock":
             import boto3
             self.bedrock_client = boto3.client(
@@ -73,7 +100,7 @@ class LLMService:
         """Yield explanation tokens for the given data profile."""
         user_prompt = self._build_profile_prompt(profile)
 
-        if self.provider in ("ollama", "local", "openai"):
+        if self.provider in ("ollama", "local", "openai", "gemini"):
             async for token in self._stream_openai_compatible(
                 system_prompt=self.SYSTEM_EXPLAIN,
                 user_prompt=user_prompt
@@ -95,7 +122,7 @@ class LLMService:
                 yield token
 
         else:
-            yield f"⚠️ Unknown LLM_PROVIDER: `{self.provider}`. Supported: `ollama`, `bedrock`, `anthropic`."
+            yield f"⚠️ Unknown LLM_PROVIDER: `{self.provider}`. Supported: `gemini`, `ollama`, `bedrock`, `anthropic`, `openai`."
 
     async def stream_answer(
         self,
@@ -113,7 +140,7 @@ class LLMService:
 
         messages = [{"role": msg["role"], "content": msg["content"]} for msg in history]
 
-        if self.provider in ("ollama", "local", "openai"):
+        if self.provider in ("ollama", "local", "openai", "gemini"):
             async for token in self._stream_openai_compatible(
                 system_prompt=system_prompt,
                 messages=messages
@@ -143,7 +170,7 @@ class LLMService:
         messages: list[dict] | None = None,
     ) -> AsyncGenerator[str, None]:
         if not self.openai_client:
-            yield "⚠️ Local LLM client not initialized."
+            yield "⚠️ LLM client not initialized. Check your environment variables."
             return
 
         formatted_messages = [{"role": "system", "content": system_prompt}]
@@ -154,19 +181,23 @@ class LLMService:
 
         try:
             stream = await self.openai_client.chat.completions.create(
-                model=settings.local_llm_model,
+                model=self.model_name,
                 messages=formatted_messages,
                 stream=True,
             )
             async for chunk in stream:
-                if chunk.choices and chunk.choices[0].delta.content:
+                if chunk.choices and len(chunk.choices) > 0 and chunk.choices[0].delta.content:
                     yield chunk.choices[0].delta.content
         except Exception as exc:
-            yield (
-                f"\n\n⚠️ **Local LLM Connection Error:** Could not connect to local server at `{settings.local_llm_base_url}`.\n"
-                f"Ensure Ollama or vLLM is running locally (`ollama run {settings.local_llm_model}`).\n\n"
-                f"Details: `{exc}`"
-            )
+            if self.provider in ("ollama", "local"):
+                yield (
+                    f"\n\n⚠️ **Local LLM Connection Error:** Could not connect to local server at `{settings.local_llm_base_url}`.\n"
+                    f"Ensure Ollama or vLLM is running locally (`ollama run {settings.local_llm_model}`).\n"
+                    f"For cloud deployment (e.g. Render/Vercel), add `GEMINI_API_KEY` or `ANTHROPIC_API_KEY` to Environment Variables.\n\n"
+                    f"Details: `{exc}`"
+                )
+            else:
+                yield f"\n\n⚠️ **AI Service Error ({self.provider}):** `{exc}`"
 
     async def _stream_aws_bedrock(
         self,
@@ -193,7 +224,6 @@ class LLMService:
         })
 
         try:
-            # Bedrock invoke_model_with_response_stream is synchronous generator in boto3
             response = await asyncio.to_thread(
                 self.bedrock_client.invoke_model_with_response_stream,
                 modelId=settings.aws_bedrock_model_id,
@@ -218,12 +248,12 @@ class LLMService:
         if not self.anthropic_client:
             yield (
                 "⚠️ **API Key Not Configured**\n\n"
-                "Set `ANTHROPIC_API_KEY` or switch `LLM_PROVIDER=ollama` to run locally without API keys."
+                "Set `ANTHROPIC_API_KEY` or `GEMINI_API_KEY` in Environment Variables."
             )
             return
 
         async with self.anthropic_client.messages.stream(
-            model="claude-sonnet-4-20250514",
+            model="claude-3-5-sonnet-20241022",
             max_tokens=4096,
             system=system_prompt,
             messages=messages,
