@@ -9,7 +9,20 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    # ── Anthropic ────────────────────────────────────────────
+    # ── LLM Provider Configuration ───────────────────────────
+    # Options: "ollama" (or "local"), "bedrock", "anthropic"
+    llm_provider: str = "ollama"
+
+    # ── Local / Self-Hosted LLM (Ollama, vLLM, LM Studio) ────
+    # No API key required for local Ollama or private vLLM on AWS EC2
+    local_llm_base_url: str = "http://localhost:11434/v1"
+    local_llm_model: str = "llama3.1"
+
+    # ── AWS Bedrock (Uses AWS IAM Roles — No third-party API key) ──
+    aws_region: str = "us-east-1"
+    aws_bedrock_model_id: str = "meta.llama3-8b-instruct-v1:0"
+
+    # ── Anthropic (Optional) ─────────────────────────────────
     anthropic_api_key: str = ""
 
     # ── IBM Cloud Object Storage (optional) ──────────────────
@@ -34,3 +47,4 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+

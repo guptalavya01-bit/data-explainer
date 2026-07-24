@@ -1,21 +1,22 @@
 """
-Claude streaming client.
+Multi-provider LLM streaming client.
 
-Uses ``anthropic.AsyncAnthropic`` with ``client.messages.stream()`` so that
-tokens are yielded **as they arrive** — no buffering the full response first.
+Supports:
+1. Local LLM / Ollama / vLLM (OpenAI-compatible protocol, NO API key needed)
+2. AWS Bedrock (Serverless Llama 3 via AWS IAM credentials)
+3. Anthropic Claude (via ANTHROPIC_API_KEY)
 """
 
 from __future__ import annotations
 
+import json
 from typing import AsyncGenerator
-
-import anthropic
 
 from core.config import settings
 
 
 class LLMService:
-    """Wraps the Anthropic Messages API for streaming explanations and Q&A."""
+    """Wraps local LLMs (Ollama/vLLM), AWS Bedrock, and Anthropic for streaming data analysis."""
 
     SYSTEM_EXPLAIN = (
         "You are an expert data analyst. Analyze the provided dataset profile "
@@ -39,40 +40,62 @@ class LLMService:
     )
 
     def __init__(self) -> None:
-        if settings.anthropic_api_key:
-            self.client = anthropic.AsyncAnthropic(
-                api_key=settings.anthropic_api_key
-            )
-        else:
-            self.client = None
-        self.model = "claude-sonnet-4-20250514"
+        self.provider = settings.llm_provider.lower()
 
-    # ── public generators ────────────────────────────────────
+        # Initialize clients lazily based on configured provider
+        self.openai_client = None
+        self.anthropic_client = None
+        self.bedrock_client = None
+
+        if self.provider in ("ollama", "local", "openai"):
+            import openai
+            # For Ollama / Local LLM, no real API key is needed. Dummy string "ollama" satisfies SDK.
+            self.openai_client = openai.AsyncOpenAI(
+                base_url=settings.local_llm_base_url,
+                api_key="ollama"
+            )
+        elif self.provider == "anthropic":
+            if settings.anthropic_api_key:
+                import anthropic
+                self.anthropic_client = anthropic.AsyncAnthropic(
+                    api_key=settings.anthropic_api_key
+                )
+        elif self.provider == "bedrock":
+            import boto3
+            self.bedrock_client = boto3.client(
+                service_name="bedrock-runtime",
+                region_name=settings.aws_region
+            )
 
     async def stream_explanation(
         self, profile: dict
     ) -> AsyncGenerator[str, None]:
-        """Yield explanation tokens from Claude for the given data profile."""
-        if not self.client:
-            yield (
-                "⚠️ **API Key Not Configured**\n\n"
-                "Set the `ANTHROPIC_API_KEY` environment variable to enable "
-                "AI analysis.\n\n"
-                "Sign up at [console.anthropic.com](https://console.anthropic.com) "
-                "— new accounts receive free credit."
-            )
-            return
-
+        """Yield explanation tokens for the given data profile."""
         user_prompt = self._build_profile_prompt(profile)
 
-        async with self.client.messages.stream(
-            model=self.model,
-            max_tokens=4096,
-            system=self.SYSTEM_EXPLAIN,
-            messages=[{"role": "user", "content": user_prompt}],
-        ) as stream:
-            async for text in stream.text_stream:
-                yield text
+        if self.provider in ("ollama", "local", "openai"):
+            async for token in self._stream_openai_compatible(
+                system_prompt=self.SYSTEM_EXPLAIN,
+                user_prompt=user_prompt
+            ):
+                yield token
+
+        elif self.provider == "bedrock":
+            async for token in self._stream_aws_bedrock(
+                system_prompt=self.SYSTEM_EXPLAIN,
+                messages=[{"role": "user", "content": user_prompt}]
+            ):
+                yield token
+
+        elif self.provider == "anthropic":
+            async for token in self._stream_anthropic(
+                system_prompt=self.SYSTEM_EXPLAIN,
+                messages=[{"role": "user", "content": user_prompt}]
+            ):
+                yield token
+
+        else:
+            yield f"⚠️ Unknown LLM_PROVIDER: `{self.provider}`. Supported: `ollama`, `bedrock`, `anthropic`."
 
     async def stream_answer(
         self,
@@ -81,32 +104,132 @@ class LLMService:
         question: str,
     ) -> AsyncGenerator[str, None]:
         """Yield answer tokens for a follow-up question about the same dataset."""
-        if not self.client:
-            yield "⚠️ API key not configured."
-            return
-
-        system = (
+        system_prompt = (
             "You are an expert data analyst. You have already analyzed a dataset. "
             "Answer the user's follow-up questions using the dataset profile below.\n\n"
             f"{self._build_profile_prompt(profile)}\n\n"
             "Be specific, reference actual numbers, and use markdown formatting."
         )
 
-        # Build messages list — must start with a user turn for Claude
-        messages: list[dict] = []
-        for msg in history:
-            messages.append({"role": msg["role"], "content": msg["content"]})
+        messages = [{"role": msg["role"], "content": msg["content"]} for msg in history]
 
-        async with self.client.messages.stream(
-            model=self.model,
+        if self.provider in ("ollama", "local", "openai"):
+            async for token in self._stream_openai_compatible(
+                system_prompt=system_prompt,
+                messages=messages
+            ):
+                yield token
+
+        elif self.provider == "bedrock":
+            async for token in self._stream_aws_bedrock(
+                system_prompt=system_prompt,
+                messages=messages
+            ):
+                yield token
+
+        elif self.provider == "anthropic":
+            async for token in self._stream_anthropic(
+                system_prompt=system_prompt,
+                messages=messages
+            ):
+                yield token
+
+    # ── Private Provider Implementations ──────────────────────
+
+    async def _stream_openai_compatible(
+        self,
+        system_prompt: str,
+        user_prompt: str | None = None,
+        messages: list[dict] | None = None,
+    ) -> AsyncGenerator[str, None]:
+        if not self.openai_client:
+            yield "⚠️ Local LLM client not initialized."
+            return
+
+        formatted_messages = [{"role": "system", "content": system_prompt}]
+        if messages:
+            formatted_messages.extend(messages)
+        elif user_prompt:
+            formatted_messages.append({"role": "user", "content": user_prompt})
+
+        try:
+            stream = await self.openai_client.chat.completions.create(
+                model=settings.local_llm_model,
+                messages=formatted_messages,
+                stream=True,
+            )
+            async for chunk in stream:
+                if chunk.choices and chunk.choices[0].delta.content:
+                    yield chunk.choices[0].delta.content
+        except Exception as exc:
+            yield (
+                f"\n\n⚠️ **Local LLM Connection Error:** Could not connect to local server at `{settings.local_llm_base_url}`.\n"
+                f"Ensure Ollama or vLLM is running locally (`ollama run {settings.local_llm_model}`).\n\n"
+                f"Details: `{exc}`"
+            )
+
+    async def _stream_aws_bedrock(
+        self,
+        system_prompt: str,
+        messages: list[dict],
+    ) -> AsyncGenerator[str, None]:
+        if not self.bedrock_client:
+            yield "⚠️ AWS Bedrock client not initialized."
+            return
+
+        import asyncio
+
+        prompt_str = f"<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n{system_prompt}<|eot_id|>"
+        for m in messages:
+            role = m["role"]
+            content = m["content"]
+            prompt_str += f"<|start_header_id|>{role}<|end_header_id|>\n{content}<|eot_id|>"
+        prompt_str += "<|start_header_id|>assistant<|end_header_id|>\n"
+
+        body = json.dumps({
+            "prompt": prompt_str,
+            "max_gen_len": 4096,
+            "temperature": 0.5,
+        })
+
+        try:
+            # Bedrock invoke_model_with_response_stream is synchronous generator in boto3
+            response = await asyncio.to_thread(
+                self.bedrock_client.invoke_model_with_response_stream,
+                modelId=settings.aws_bedrock_model_id,
+                body=body
+            )
+
+            for event in response.get("body"):
+                chunk = json.loads(event["chunk"]["bytes"])
+                if "generation" in chunk:
+                    yield chunk["generation"]
+        except Exception as exc:
+            yield (
+                f"\n\n⚠️ **AWS Bedrock Error:** `{exc}`\n"
+                "Ensure your AWS credentials / IAM Role has `bedrock:InvokeModelWithResponseStream` permissions."
+            )
+
+    async def _stream_anthropic(
+        self,
+        system_prompt: str,
+        messages: list[dict],
+    ) -> AsyncGenerator[str, None]:
+        if not self.anthropic_client:
+            yield (
+                "⚠️ **API Key Not Configured**\n\n"
+                "Set `ANTHROPIC_API_KEY` or switch `LLM_PROVIDER=ollama` to run locally without API keys."
+            )
+            return
+
+        async with self.anthropic_client.messages.stream(
+            model="claude-sonnet-4-20250514",
             max_tokens=4096,
-            system=system,
+            system=system_prompt,
             messages=messages,
         ) as stream:
             async for text in stream.text_stream:
                 yield text
-
-    # ── prompt builders ──────────────────────────────────────
 
     @staticmethod
     def _build_profile_prompt(profile: dict) -> str:

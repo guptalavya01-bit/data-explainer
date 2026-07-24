@@ -23,11 +23,13 @@ Built for the IBM SkillsBuild × Bharat Cares **"Vibe Coding" GenAI + Cloud Comp
 
 - **Frontend:** React 18 + Vite + Tailwind CSS 3
 - **Backend:** Python 3.11, FastAPI, pandas, openpyxl
-- **LLM:** Anthropic Claude (claude-sonnet-4-20250514) via streaming Messages API
+- **LLM Engine:** Local LLM via Ollama / vLLM (Llama 3.1, Qwen 2.5 - **No API Key needed**), AWS Bedrock, or Anthropic Claude
 - **Containerization:** Docker multi-stage build
-- **Deployment:** Render.com (free tier) or any Docker host
+- **Deployment:** AWS (App Runner / EC2 GPU — see [AWS Deployment Guide](file:///c:/Users/LAVYA/OneDrive/Desktop/IBM%20oroject/data-explainer/AWS_DEPLOYMENT.md)) or Render / Vercel
 
 ---
+
+
 
 ## 🚀 Quick Start
 
