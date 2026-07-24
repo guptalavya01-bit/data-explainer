@@ -1,0 +1,90 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── base ────────────────────────────────────────────────── */
+@layer base {
+  *,
+  *::before,
+  *::after {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(99, 102, 241, 0.25) transparent;
+  }
+
+  *::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: rgba(99, 102, 241, 0.25);
+    border-radius: 3px;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background: rgba(99, 102, 241, 0.45);
+  }
+
+  body {
+    @apply bg-[#0B1120] text-slate-200 font-sans antialiased;
+    background-image: radial-gradient(
+        at 20% 80%,
+        rgba(99, 102, 241, 0.08) 0px,
+        transparent 50%
+      ),
+      radial-gradient(
+        at 80% 20%,
+        rgba(6, 182, 212, 0.06) 0px,
+        transparent 50%
+      ),
+      radial-gradient(
+        at 50% 50%,
+        rgba(139, 92, 246, 0.04) 0px,
+        transparent 50%
+      );
+    min-height: 100vh;
+  }
+}
+
+/* ── components ──────────────────────────────────────────── */
+@layer components {
+  .glass-card {
+    @apply bg-white/[0.03] backdrop-blur-xl border border-white/[0.06] rounded-2xl shadow-xl;
+  }
+
+  .gradient-text {
+    @apply bg-gradient-to-r from-indigo-400 via-purple-400 to-cyan-400 bg-clip-text text-transparent;
+  }
+
+  .btn-primary {
+    @apply px-6 py-3 bg-gradient-to-r from-indigo-600 to-purple-600
+           hover:from-indigo-500 hover:to-purple-500
+           text-white font-semibold rounded-xl transition-all duration-300
+           shadow-lg shadow-indigo-500/25 hover:shadow-indigo-500/40
+           hover:-translate-y-0.5 active:translate-y-0
+           disabled:opacity-50 disabled:cursor-not-allowed
+           disabled:hover:translate-y-0 disabled:hover:shadow-indigo-500/25;
+  }
+
+  .btn-secondary {
+    @apply px-4 py-2 bg-white/[0.05] hover:bg-white/[0.1]
+           border border-white/[0.1] text-slate-300 font-medium
+           rounded-xl transition-all duration-300;
+  }
+
+  .input-field {
+    @apply w-full px-4 py-3 bg-white/[0.05] border border-white/[0.1]
+           rounded-xl text-white placeholder-slate-500
+           focus:outline-none focus:border-indigo-500/50
+           focus:ring-2 focus:ring-indigo-500/20 transition-all duration-300;
+  }
+}
+
+/* ── utilities ───────────────────────────────────────────── */
+@layer utilities {
+  .streaming-cursor::after {
+    content: "▊";
+    @apply text-indigo-400 animate-pulse ml-0.5 inline;
+  }
+}
